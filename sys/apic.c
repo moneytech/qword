@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <sys/apic.h>
 #include <lib/klib.h>
-#include <cpuid.h>
 #include <acpi/madt.h>
 #include <mm/mm.h>
 #include <sys/cpu.h>
@@ -14,7 +13,7 @@ int apic_supported(void) {
 
     kprint(KPRN_INFO, "apic: Checking for support...");
 
-    __get_cpuid(1, &eax, &ebx, &ecx, &edx);
+    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
 
     /* Check if the apic bit is set */
     if ((edx & APIC_CPUID_BIT)) {
@@ -37,7 +36,7 @@ void lapic_write(uint32_t reg, uint32_t data) {
 }
 
 void lapic_set_nmi(uint8_t vec, uint16_t flags, uint8_t lint) {
-    uint32_t nmi = 800 | vec;
+    uint32_t nmi = 0x400 | vec;
 
     if (flags & 2) {
         nmi |= (1 << 13);
@@ -54,10 +53,8 @@ void lapic_set_nmi(uint8_t vec, uint16_t flags, uint8_t lint) {
     }
 }
 
-void lapic_install_nmis(void) {
-    for (size_t i = 0; i < madt_nmi_i; i++)
-        /* Reserve vectors 0x90 .. lengthof(madt_nmi_ptr) for NMIs. */
-        lapic_set_nmi(0x90 + i, madt_nmis[i]->flags, madt_nmis[i]->lint);
+void lapic_install_nmi(int vec, int nmi) {
+    lapic_set_nmi(vec, madt_nmis[nmi]->flags, madt_nmis[nmi]->lint);
 }
 
 void lapic_enable(void) {
@@ -102,16 +99,17 @@ uint32_t io_apic_get_max_redirect(size_t io_apic_num) {
     return (io_apic_read(io_apic_num, 1) & 0xff0000) >> 16;
 }
 
-void io_apic_set_redirect(uint8_t irq, uint32_t gsi, uint16_t flags, uint8_t apic, int status) {
+static void io_apic_set_redirect(uint8_t vec, uint32_t gsi, uint16_t flags, int cpu, int status) {
     size_t io_apic = io_apic_from_redirect(gsi);
 
-    /* Map APIC irqs to vectors beginning after exceptions */
-    uint64_t redirect = irq + 0x20;
+    uint64_t redirect = vec;
 
+    // Active high(0) or low(1)
     if (flags & 2) {
         redirect |= (1 << 13);
     }
 
+    // Edge(0) or level(1) triggered
     if (flags & 8) {
         redirect |= (1 << 15);
     }
@@ -122,35 +120,33 @@ void io_apic_set_redirect(uint8_t irq, uint32_t gsi, uint16_t flags, uint8_t api
     }
 
     /* Set target APIC ID */
-    redirect |= ((uint64_t)apic) << 56;
+    redirect |= ((uint64_t)cpu_locals[cpu].lapic_id) << 56;
     uint32_t ioredtbl = (gsi - madt_io_apics[io_apic]->gsib) * 2 + 16;
 
     io_apic_write(io_apic, ioredtbl + 0, (uint32_t)redirect);
     io_apic_write(io_apic, ioredtbl + 1, (uint32_t)(redirect >> 32));
 }
 
-void io_apic_set_mask(int cpu, int irq, int status) {
-    uint8_t apic = cpu_locals[cpu].lapic_id;
-
+void io_apic_set_up_legacy_irq(int cpu, uint8_t irq, int status) {
     /* Redirect will handle whether the IRQ is masked or not, we just need to search the
      * MADT ISOs for a corresponding IRQ */
     for (size_t i = 0; i < madt_iso_i; i++) {
         if (madt_isos[i]->irq_source == irq) {
-            io_apic_set_redirect(madt_isos[i]->irq_source, madt_isos[i]->gsi,
-                            madt_isos[i]->flags, apic, status);
+            io_apic_set_redirect(madt_isos[i]->irq_source + 0x20, madt_isos[i]->gsi,
+                            madt_isos[i]->flags, cpu, status);
             return;
         }
     }
+    io_apic_set_redirect(irq + 0x20, irq, 0, cpu, status);
+}
 
-    io_apic_set_redirect(irq, irq, 0, apic, status);
+void io_apic_connect_gsi_to_vec(int cpu, uint8_t vec, uint32_t gsi, uint16_t flags, int status) {
+    io_apic_set_redirect(vec, gsi, flags, cpu, status);
 }
 
 uint32_t *lapic_eoi_ptr;
 
 void init_apic(void) {
-    kprint(KPRN_INFO, "apic: Installing non-maskable interrupts...");
-    lapic_install_nmis();
-    kprint(KPRN_INFO, "apic: Enabling local APIC...");
     lapic_enable();
     size_t lapic_base = (size_t)madt->local_controller_addr + MEM_PHYS_OFFSET;
     lapic_eoi_ptr = (uint32_t *)(lapic_base + 0xb0);

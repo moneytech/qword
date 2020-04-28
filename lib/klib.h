@@ -21,6 +21,10 @@
 
 #define DIV_ROUNDUP(a, b) (((a) + ((b) - 1)) / (b))
 
+__attribute__((always_inline)) inline void memory_barrier() {
+    asm volatile ("" ::: "memory");
+}
+
 __attribute__((always_inline)) inline int is_printable(char c) {
     return (c >= 0x20 && c <= 0x7e);
 }
@@ -41,6 +45,7 @@ __attribute__((always_inline)) inline void atomic_add_uint64_relaxed(uint64_t *p
         "lock xadd qword ptr [%1], %0;"
         : "+r" (x)
         : "r" (p)
+        : "memory"
     );
 }
 
@@ -53,21 +58,8 @@ char *prefixed_itoa(const char *, int64_t, int);
 int islower(int);
 int tolower(int);
 int toupper(int);
-char *strchrnul(const char *, int);
-char *strcpy(char *, const char *);
-char *strncpy(char *, const char *, size_t);
-size_t strlen(const char *);
-int strcmp(const char *, const char *);
-int strncmp(const char *, const char *, size_t);
 void kprint(int type, const char *fmt, ...);
 void kvprint(int type, const char *fmt, va_list args);
-
-void *memset(void *, int, size_t);
-void *memset64(void *, uint64_t, size_t);
-void *memcpy(void *, const void *, size_t);
-void *memcpy64(void *, const void *, size_t);
-int memcmp(const void *, const void *, size_t);
-void *memmove(void *, const void *, size_t);
 
 void readline(int, const char *, char *, size_t);
 

@@ -13,8 +13,11 @@
 #include <lib/time.h>
 #include <lib/event.h>
 #include <lib/signal.h>
-#include <sys/hpet.h>
+#include <sys/pit.h>
 #include <sys/urm.h>
+#include <lib/cstring.h>
+#include <lib/cmem.h>
+#include <sys/cpu.h>
 
 #define SCHED_TIMESLICE_MS 5
 
@@ -35,10 +38,12 @@ int64_t task_count = 0;
 static struct regs_t default_krnl_regs = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x08,0x202,0,0x10};
 static struct regs_t default_usr_regs = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x23,0x202,0,0x1b};
 
-static uint8_t default_fxstate[512] __attribute__((aligned(16)));
+static uint8_t* default_fxstate;
 
 void init_sched(void) {
-    fxsave(&default_fxstate);
+    default_fxstate = kalloc(cpu_simd_region_size);
+
+    cpu_save_simd(default_fxstate);
 
     kprint(KPRN_INFO, "sched: Initialising process table...");
 
@@ -73,7 +78,7 @@ void yield(void) {
 void relaxed_sleep(uint64_t ms) {
     spinlock_acquire(&scheduler_lock);
 
-    uint64_t yield_target = (uptime_raw + (ms * (HPET_FREQUENCY_HZ / 1000))) + 1;
+    uint64_t yield_target = (uptime_raw + (ms * (PIT_FREQUENCY_HZ / 1000))) + 1;
 
     tid_t current_task = cpu_locals[current_cpu].current_task;
     task_table[current_task]->yield_target = yield_target;
@@ -192,9 +197,24 @@ static inline tid_t task_get_next(tid_t current_task) {
             goto next;
         }
         if (thread->event_ptr) {
-            if (!thread->event_abrt) {
-                if (locked_read(event_t, thread->event_ptr)) {
-                    locked_dec(thread->event_ptr);
+            if(!thread->event_abrt) {
+                int wake = 0;
+                for(int i = 0; i < (thread->event_num); i++) {
+                    if(locked_read(event_t, thread->event_ptr[i])) {
+                        wake = 1;
+                        locked_dec(thread->event_ptr[i]);
+                        thread->out_event_ptr[i] = 1;
+                    }
+                }
+
+                //only trigger timeout if no other events happened
+                if(thread->event_timeout <= uptime_raw && (thread->event_timeout != 0) && !wake) {
+                    thread->event_ptr = 0;
+                    thread->event_timeout = 0;
+                    wake = 1;
+                }
+
+                if(wake) {
                     thread->event_ptr = 0;
                 } else {
                     spinlock_release(&thread->lock);
@@ -269,7 +289,7 @@ void task_resched(struct regs_t *regs) {
         current_thread->ctx.regs = *regs;
         if (current_process) {
             /* Save FPU context */
-            fxsave(&current_thread->ctx.fxstate);
+            cpu_save_simd(current_thread->ctx.fxstate);
             /* Save user rsp */
             current_thread->ustack = cpu_locals[current_cpu].thread_ustack;
             /* Save errno */
@@ -296,13 +316,13 @@ skip_invalid_thread_context_save:
     cpu_local->current_process = thread->process;
 
     if (thread->process) {
-       cpu_local->thread_kstack = thread->kstack;
-       cpu_local->thread_ustack = thread->ustack;
-       cpu_local->thread_errno = thread->thread_errno;
-       /* Restore FPU context */
-       fxrstor(&thread->ctx.fxstate);
-       /* Restore thread FS base */
-       load_fs_base(thread->fs_base);
+        cpu_local->thread_kstack = thread->kstack;
+        cpu_local->thread_ustack = thread->ustack;
+        cpu_local->thread_errno = thread->thread_errno;
+        /* Restore FPU context */
+        cpu_restore_simd(thread->ctx.fxstate);
+        /* Restore thread FS base */
+        load_fs_base(thread->fs_base);
     }
 
     thread->active_on_cpu = _current_cpu;
@@ -431,7 +451,7 @@ found_new_pid:
 }
 
 void abort_thread_exec(size_t scheduler_not_locked) {
-    load_cr3((size_t)kernel_pagemap->pml4 - MEM_PHYS_OFFSET);
+    write_cr("3", (size_t)kernel_pagemap->pml4 - MEM_PHYS_OFFSET);
 
     int _current_cpu = current_cpu;
 
@@ -616,6 +636,8 @@ found_new_task_id:;
         spinlock_release(&scheduler_lock);
         return -1;
     }
+    new_thread->kstack -= sizeof(uint64_t);
+    *((size_t *)new_thread->kstack) = 0;
 
     new_thread->active_on_cpu = -1;
 
@@ -624,6 +646,8 @@ found_new_task_id:;
         new_thread->ctx.regs = default_usr_regs;
     else
         new_thread->ctx.regs = default_krnl_regs;
+
+    new_thread->ctx.fxstate = kalloc(cpu_simd_region_size);
 
     /* Set up a user stack for the thread */
     if (pid) {
@@ -712,8 +736,7 @@ found_new_task_id:;
             map_page(process_table[pid]->pagemap,
                      (size_t)(stack_pm + (i * PAGE_SIZE)),
                      (size_t)(stack_bottom + (i * PAGE_SIZE)),
-                     pid ? 0x07 : 0x03,
-                     VMM_ATTR_REG);
+                     pid ? 0x07 : 0x03);
         }
         /* Add a guard page */
         unmap_page(process_table[pid]->pagemap, stack_guardpage);
@@ -735,7 +758,7 @@ found_new_task_id:;
         new_thread->ctx.regs.rip = (size_t)data->entry;
     }
 
-    memcpy(new_thread->ctx.fxstate, default_fxstate, 512);
+    memcpy(new_thread->ctx.fxstate, default_fxstate, cpu_simd_region_size);
 
     new_thread->tid = new_tid;
     new_thread->task_id = new_task_id;

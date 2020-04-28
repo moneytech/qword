@@ -7,6 +7,7 @@
 #include <lib/lock.h>
 #include <lib/errno.h>
 #include <sys/panic.h>
+#include <lib/cstring.h>
 
 dynarray_new(struct device_t, devices);
 
@@ -46,7 +47,8 @@ static int devfs_open(const char *path, int flags, int unused) {
     if (*path == '/')
         path++;
 
-    struct device_t *device = dynarray_search(struct device_t, devices, !strcmp(elem->name, path));
+    size_t i;
+    struct device_t *device = dynarray_search(struct device_t, devices, &i, !strcmp(elem->name, path), 0);
     if (!device) {
         if (flags & O_CREAT)
             errno = EROFS;

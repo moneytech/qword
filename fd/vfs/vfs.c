@@ -5,6 +5,8 @@
 #include <lib/errno.h>
 #include <lib/dynarray.h>
 #include <lib/ht.h>
+#include <lib/cstring.h>
+#include <lib/cmem.h>
 
 struct vfs_handle_t {
     struct fs_t *fs;
@@ -293,6 +295,14 @@ static int vfs_unlink(int fd) {
     return ret;
 }
 
+static int vfs_getpath(int fd, char *buf) {
+    struct vfs_handle_t *fd_ptr = dynarray_getelem(struct vfs_handle_t, vfs_handles, fd);
+    int intern_fd = fd_ptr->intern_fd;
+    int ret = fd_ptr->fs->getpath(intern_fd, buf);
+    dynarray_unref(vfs_handles, fd);
+    return ret;
+}
+
 int mkdir(const char *path) {
     char *loc_path;
 
@@ -376,6 +386,20 @@ int mount(const char *source, const char *target,
         return -1;
 
     kprint(KPRN_INFO, "vfs: Mounted `%s` on `%s`, type `%s`.", source, target, fs_type);
+
+    return 0;
+}
+
+int umount(const char *target) {
+    struct mnt_t *mount = ht_get(struct mnt_t, mountpoints, target);
+
+    int ret = mount->fs->umount(mount->magic);
+
+    if (ret)
+        return ret;
+
+    ht_remove(struct mnt_t, mountpoints, target);
+    kfree(mount);
 
     return 0;
 }

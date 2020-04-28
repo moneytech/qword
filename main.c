@@ -4,13 +4,12 @@
 #include <lib/klib.h>
 #include <devices/display/vbe/vbe.h>
 #include <devices/term/tty/tty.h>
-#include <sys/e820.h>
 #include <mm/mm.h>
 #include <sys/idt.h>
 #include <sys/pic.h>
 #include <acpi/acpi.h>
 #include <lib/cmdline.h>
-#include <sys/hpet.h>
+#include <sys/pit.h>
 #include <sys/smp.h>
 #include <proc/task.h>
 #include <devices/dev.h>
@@ -18,24 +17,26 @@
 #include <proc/elf.h>
 #include <sys/pci.h>
 #include <lib/time.h>
-#include <sys/irq.h>
 #include <sys/panic.h>
 #include <fs/fs.h>
 #include <fd/fd.h>
 #include <devices/dev.h>
-#include <sys/vga_font.h>
 #include <lib/rand.h>
 #include <sys/urm.h>
 #include <net/hostname.h>
+#include <lib/cstring.h>
+#include <startup/stivale.h>
+
+#include <lai/core.h>
+#include <lai/helpers/sci.h>
+
+char *cmdline;
 
 void kmain_thread(void *arg) {
     (void)arg;
 
     /* Launch the urm */
     task_tcreate(0, tcreate_fn_call, tcreate_fn_call_data(0, userspace_request_monitor, 0));
-
-    /* Initialise PCI */
-    init_pci();
 
     /* Initialise file descriptor handlers */
     init_fd();
@@ -51,41 +52,26 @@ void kmain_thread(void *arg) {
 
     int tty = open("/dev/tty0", O_RDWR);
 
-    char *root = cmdline_get_value("root");
-    char new_root[64];
-    if (!root) {
+    char root[64];
+    if (!cmdline_get_value(root, 64, "root")) {
         kprint(KPRN_WARN, "kmain: Command line argument \"root\" not specified.");
-        readline(tty, "Select root device: ", new_root, 64);
-        root = new_root;
-    } else {
-        strcpy(new_root, root);
-        root = new_root;
+        readline(tty, "Select root device: ", root, 64);
     }
-    kprint(KPRN_INFO, "kmain: root=%s", new_root);
+    kprint(KPRN_INFO, "kmain: root=%s", root);
 
-    char *rootfs = cmdline_get_value("rootfs");
-    char new_rootfs[64];
-    if (!rootfs) {
+    char rootfs[64];
+    if (!cmdline_get_value(rootfs, 64, "rootfs")) {
         kprint(KPRN_WARN, "kmain: Command line argument \"rootfs\" not specified.");
-        readline(tty, "Root filesystem to use: ", new_rootfs, 64);
-        rootfs = new_rootfs;
-    } else {
-        strcpy(new_rootfs, rootfs);
-        rootfs = new_rootfs;
+        readline(tty, "Root filesystem to use: ", rootfs, 64);
     }
-    kprint(KPRN_INFO, "kmain: rootfs=%s", new_rootfs);
+    kprint(KPRN_INFO, "kmain: rootfs=%s", rootfs);
 
-    char *init = cmdline_get_value("init");
-    char new_init[64];
-    if (!init) {
+    char init[64];
+    if (!cmdline_get_value(init, 64, "init")) {
         kprint(KPRN_WARN, "kmain: Command line argument \"init\" not specified.");
-        readline(tty, "Location of init: ", new_init, 64);
-        init = new_init;
-    } else {
-        strcpy(new_init, init);
-        init = new_init;
+        readline(tty, "Location of init: ", init, 64);
     }
-    kprint(KPRN_INFO, "kmain: init=%s", new_init);
+    kprint(KPRN_INFO, "kmain: init=%s", init);
 
     close(tty);
 
@@ -128,44 +114,54 @@ void kmain_thread(void *arg) {
     for (;;) asm volatile ("hlt;");
 }
 
+extern void *gdt_ptr[];
+
 /* Main kernel entry point, only initialise essential services and scheduler */
-void kmain(void) {
+void kmain(struct stivale_struct_t *stivale) {
+    char cmdline_val[64];
+    cmdline = stivale->cmdline;
+
     kprint(KPRN_INFO, "Kernel booted");
     kprint(KPRN_INFO, "Build time: %s", BUILD_TIME);
     kprint(KPRN_INFO, "Command line: %s", cmdline);
 
     init_idt();
+    init_cpu_features();
 
     /* Memory-related stuff */
-    init_e820();
-    init_pmm();
+    init_pmm(&(stivale->memmap));
     init_rand();
-    init_vmm();
+    init_vmm(&(stivale->memmap));
 
-    init_vbe();
+    init_vbe(&(stivale->fb));
     init_tty();
 
-    /* Time stuff */
-    struct s_time_t s_time;
-    bios_get_time(&s_time);
-    kprint(KPRN_INFO, "Current date & time: %u/%u/%u %u:%u:%u",
-           s_time.years, s_time.months, s_time.days,
-           s_time.hours, s_time.minutes, s_time.seconds);
-    unix_epoch = get_unix_epoch(s_time.seconds, s_time.minutes, s_time.hours,
-                                s_time.days, s_time.months, s_time.years);
-    kprint(KPRN_INFO, "Current unix epoch: %U", unix_epoch);
+    asm volatile ("lgdt [%0];": :"r"(gdt_ptr));
 
     /*** NO MORE REAL MODE CALLS AFTER THIS POINT ***/
     flush_irqs();
     init_acpi();
     init_pic();
 
-    /* Init the HPET */
-    init_hpet();
+    // TODO read date from RTC and set UNIX epoch accordingly
+
+    /* Init the PIT */
+    init_pit();
+
+    /* LAI */
+    if (!cmdline_get_value(cmdline_val, 64, "acpi") || !strcmp(cmdline_val, "enabled")) {
+        lai_set_acpi_revision(rsdp->rev);
+        lai_create_namespace();
+        // lai_enable_acpi(1);
+    }
+
+    /* Initialise PCI */
+    init_pci();
 
     /* Init Symmetric Multiprocessing */
     asm volatile ("sti");
     init_smp();
+
     asm volatile ("cli");
 
     /* Initialise scheduler */

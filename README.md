@@ -2,10 +2,28 @@
 
 [![goto counter](https://img.shields.io/github/search/qword-os/qword/goto.svg)](https://github.com/qword-os/qword/search?q=goto)
 
-The qword-OS kernel, a fully featured, capable x86_64 sex machine!
+![Reference screenshot](/screenshot.png?raw=true "Reference screenshot")
 
-As said, this is just the kernel. To build the whole system, follow the
+As the name implies, this is just the kernel. To build the whole system, follow the
 instructions at <https://github.com/qword-os/build>.
+
+## Discord
+Join our Discord! Invite: https://discord.gg/z6b3qZC
+
+## Prebuilt image
+Get a prebuilt image today at: https://ci.oogacraft.com/job/qword/lastSuccessfulBuild/artifact/qword.hdd.xz
+
+Note 1: This is a hard drive image compressed with xz. Unpack it with
+```bash
+xzcat < qword.hdd.xz > qword.hdd
+```
+
+Note 2: This image can be ran on QEMU using the following recommended command
+```bash
+qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 2G -hda qword.hdd
+```
+
+Note 3: The default user/password is 'root/root'.
 
 ## Build requirements
 

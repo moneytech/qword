@@ -6,7 +6,8 @@
 #include <lib/lock.h>
 #include <sys/apic.h>
 #include <devices/display/vbe/vbe.h>
-#include <sys/vga_font.h>
+#include <lib/bitmap_font.h>
+#include <lib/cstring.h>
 
 #define MAX_TTYS 6
 #define KBD_BUF_SIZE 2048
@@ -216,9 +217,9 @@ void init_tty(void) {
             vbe_height,
             vbe_width,
             vbe_pitch,
-            vga_font,
-            vga_font_height,
-            vga_font_width);
+            bitmap_font,
+            bitmap_font_height,
+            bitmap_font_width);
 }
 
 void init_dev_tty(void) {
@@ -238,6 +239,6 @@ void init_dev_tty(void) {
         device_add(&device);
     }
 
-    io_apic_set_mask(0, 1, 1);
+    io_apic_set_up_legacy_irq(0, 1, 1);
     task_tcreate(0, tcreate_fn_call, tcreate_fn_call_data(0, kbd_handler, 0));
 }

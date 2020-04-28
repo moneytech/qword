@@ -8,6 +8,7 @@
 #include <mm/mm.h>
 #include <lib/time.h>
 #include <fd/vfs/vfs.h>
+#include <lib/cstring.h>
 
 static const char *base_digits = "0123456789abcdef";
 
@@ -58,60 +59,6 @@ int tolower(int c) {
 int toupper(int c) {
     if (islower(c)) return c - ('a' - 'A');
     else return c;
-}
-
-char *strchrnul(const char *s, int c) {
-    while (*s)
-        if ((*s++) == c)
-            break;
-    return (char *)s;
-}
-
-char *strcpy(char *dest, const char *src) {
-    size_t i = 0;
-
-    for (i = 0; src[i]; i++)
-        dest[i] = src[i];
-
-    dest[i] = 0;
-
-    return dest;
-}
-
-char *strncpy(char *dest, const char *src, size_t cnt) {
-    size_t i = 0;
-
-    for (i = 0; i < cnt; i++)
-        dest[i] = src[i];
-
-    return dest;
-}
-
-int strcmp(const char *dst, const char *src) {
-    size_t i;
-
-    for (i = 0; dst[i] == src[i]; i++) {
-        if ((!dst[i]) && (!src[i])) return 0;
-    }
-
-    return 1;
-}
-
-int strncmp(const char *dst, const char *src, size_t count) {
-    size_t i;
-
-    for (i = 0; i < count; i++)
-        if (dst[i] != src[i]) return 1;
-
-    return 0;
-}
-
-size_t strlen(const char *str) {
-    size_t len;
-
-    for (len = 0; str[len]; len++);
-
-    return len;
 }
 
 void readline(int fd, const char *prompt, char *str, size_t max) {
@@ -230,29 +177,22 @@ static void kprn_ui(char *kprint_buf, size_t *kprint_buf_i, uint64_t x) {
     return;
 }
 
-static const char hex_to_ascii_tab[] = {
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
-};
+static const char hex_to_ascii_tab[] = "0123456789abcdef";
 
-static void kprn_x(char *kprint_buf, size_t *kprint_buf_i, uint64_t x) {
-    int i;
-    char buf[17] = {0};
+static void kprn_x(char *kprint_buf, size_t *kprint_buf_i, uint64_t x, int pad) {
+    int i = 15;
+    char buf[] = "0000000000000000";
 
-    if (!x) {
-        kputs(kprint_buf, kprint_buf_i, "0x0");
-        return;
+    if (x) {
+        for ( ; x; i--) {
+            buf[i] = hex_to_ascii_tab[(x % 16)];
+            x /= 16;
+        }
+        i++;
     }
 
-    for (i = 15; x; i--) {
-        buf[i] = hex_to_ascii_tab[(x % 16)];
-        x = x / 16;
-    }
-
-    i++;
     kputs(kprint_buf, kprint_buf_i, "0x");
-    kputs(kprint_buf, kprint_buf_i, buf + i);
-
-    return;
+    kputs(kprint_buf, kprint_buf_i, buf + (pad ? (16 - pad) : i));
 }
 
 static void print_timestamp(char *kprint_buf, size_t *kprint_buf_i, int type) {
@@ -314,6 +254,12 @@ void kvprint(int type, const char *fmt, va_list args) {
             kputchar(kprint_buf, &kprint_buf_i, '\n');
             goto out;
         }
+        int val = 0;
+        while (*fmt >= '0' && *fmt <= '9') {
+            val *= 10;
+            val += *fmt - '0';
+            fmt++;
+        }
         switch (*fmt++) {
             case 's':
                 str = (char *)va_arg(args, const char *);
@@ -340,10 +286,10 @@ void kvprint(int type, const char *fmt, va_list args) {
                 kprn_ui(kprint_buf, &kprint_buf_i, (uint64_t)va_arg(args, uint64_t));
                 break;
             case 'x':
-                kprn_x(kprint_buf, &kprint_buf_i, (uint64_t)va_arg(args, unsigned int));
+                kprn_x(kprint_buf, &kprint_buf_i, (uint64_t)va_arg(args, unsigned int), val);
                 break;
             case 'X':
-                kprn_x(kprint_buf, &kprint_buf_i, (uint64_t)va_arg(args, uint64_t));
+                kprn_x(kprint_buf, &kprint_buf_i, (uint64_t)va_arg(args, uint64_t), val);
                 break;
             case 'c':
                 c = (char)va_arg(args, int);
@@ -363,84 +309,4 @@ out:
     }
 
     return;
-}
-
-void *memcpy(void *dest, const void *src, size_t count) {
-    size_t i = 0;
-
-    uint8_t *dest2 = dest;
-    const uint8_t *src2 = src;
-
-    for (i = 0; i < count; i++) {
-        dest2[i] = src2[i];
-    }
-
-    return dest;
-}
-
-void *memcpy64(void *dest, const void *src, size_t count) {
-    size_t i = 0;
-
-    uint64_t *dest2 = dest;
-    const uint64_t *src2 = src;
-
-    size_t new_count = count / sizeof(uint64_t);
-    for (i = 0; i < new_count; i++) {
-        dest2[i] = src2[i];
-    }
-
-    return dest;
-}
-
-void *memset(void *s, int c, size_t count) {
-    uint8_t *p = s, *end = p + count;
-    for (; p != end; p++) {
-        *p = (uint8_t)c;
-    }
-
-    return s;
-}
-
-void *memset64(void *ptr, uint64_t c, size_t count) {
-    uint64_t *p = ptr;
-
-    for (size_t i = 0; i < count; i++) {
-        p[i] = c;
-    }
-
-    return ptr;
-}
-
-void *memmove(void *dest, const void *src, size_t count) {
-    size_t i = 0;
-
-    uint8_t *dest2 = dest;
-    const uint8_t *src2 = src;
-
-    if (src > dest) {
-        for (i = 0; i < count; i++) {
-            dest2[i] = src2[i];
-        }
-    } else if (src < dest) {
-        for (i = count; i > 0; i--) {
-            dest2[i - 1] = src2[i - 1];
-        }
-    }
-
-    return dest;
-}
-
-int memcmp(const void *s1, const void *s2, size_t n) {
-    const uint8_t *a = s1;
-    const uint8_t *b = s2;
-
-    for (size_t i = 0; i < n; i++) {
-        if (a[i] < b[i]) {
-            return -1;
-        } else if (a[i] > b[i]) {
-            return 1;
-        }
-    }
-
-    return 0;
 }

@@ -18,34 +18,6 @@
 #define CURRENT_THREAD cpu_locals[current_cpu].current_thread
 #define CURRENT_TASK cpu_locals[current_cpu].current_task
 
-#define fxsave(ptr) ({ \
-    asm volatile ( \
-                "fxsave %0;" \
-                : \
-                : "m" (*(ptr)) \
-    ); \
-})
-
-#define fxrstor(ptr) ({ \
-    asm volatile ( \
-                "fxrstor %0;" \
-                : \
-                : "m" (*(ptr)) \
-    ); \
-})
-
-#define load_fs_base(base) ({ \
-    asm volatile ( \
-        "mov eax, edx;" \
-        "shr rdx, 32;" \
-        "mov edx, edx;" \
-        "wrmsr;" \
-        : \
-        : "d" (base), "c" (0xc0000100) \
-        : "rax", "cc" \
-    ); \
-})
-
 struct regs_t {
     uint64_t r15;
     uint64_t r14;
@@ -71,7 +43,7 @@ struct regs_t {
 
 struct ctx_t {
     struct regs_t regs;
-    uint8_t fxstate[512] __attribute__((aligned(16)));
+    uint8_t *fxstate;
 };
 
 struct thread_t {
@@ -84,13 +56,16 @@ struct thread_t {
     int event_abrt;
     uint64_t yield_target;
     int paused;
-    event_t *event_ptr;
     int active_on_cpu;
     size_t kstack;
     size_t ustack;
     size_t thread_errno;
     size_t fs_base;
     struct ctx_t ctx;
+    event_t **event_ptr;
+    int *out_event_ptr;
+    size_t event_timeout;
+    int event_num;
 };
 
 #define AT_ENTRY 10
@@ -148,8 +123,8 @@ void yield(void);
 void relaxed_sleep(uint64_t);
 
 enum tcreate_abi {
-	tcreate_fn_call,
-	tcreate_elf_exec
+    tcreate_fn_call,
+    tcreate_elf_exec
 };
 
 struct tcreate_fn_call_data{
