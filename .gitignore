@@ -3,8 +3,9 @@
 /**/*.d
 qword.bin
 qword.elf
-acpi/lai
+src/acpi/lai
 symlist.gen
+limine
 
 # IDE related
 .idea
